@@ -3,6 +3,7 @@
 set -euo pipefail
 
 TMPDIR=${TMPDIR:-/tmp}
+WORKDIR=${1:-}
 
 main() {
   local payload
@@ -26,6 +27,9 @@ main() {
   local command
   command=$(echo "$payload" | jq -r '.params.command // empty')
 
+  local files
+  files=$(echo "$payload" | jq -c '.params.files // empty')
+
   local use_sudo
   use_sudo=$(echo "$payload" | jq -r '.params.use_sudo // false')
 
@@ -47,8 +51,13 @@ main() {
     exit 1
   fi
 
-  if [[ -z "$command" ]]; then
-    echo "Error: command is required in params" >&2
+  if [[ -n "$command" ]] && [[ -n "$files" ]] && [[ "$files" != "null" ]]; then
+    echo "Error: cannot specify both 'command' and 'files' - they are mutually exclusive" >&2
+    exit 1
+  fi
+
+  if [[ -z "$command" ]] && { [[ -z "$files" ]] || [[ "$files" == "null" ]]; }; then
+    echo "Error: either 'command' or 'files' is required in params" >&2
     exit 1
   fi
 
@@ -60,7 +69,7 @@ main() {
 
   local ssh_opts=()
   ssh_opts+=("-i" "$ssh_key_file")
-  ssh_opts+=("-p" "$port")
+  ssh_opts+=("-o" "Port=$port")
   ssh_opts+=("-o" "UserKnownHostsFile=/dev/null")
   ssh_opts+=("-o" "StrictHostKeyChecking=no")
   ssh_opts+=("-o" "LogLevel=ERROR")
@@ -72,6 +81,24 @@ main() {
     ssh_opts+=("-o" "UserKnownHostsFile=$known_hosts_file")
     ssh_opts+=("-o" "StrictHostKeyChecking=yes")
   fi
+
+  if [[ -n "$command" ]]; then
+    execute_command "$command" "$use_sudo" "$environment" "$hostname" "$username" "${ssh_opts[@]}"
+  else
+    upload_files "$files" "$hostname" "$username" "${ssh_opts[@]}"
+  fi
+
+  rm -f "$ssh_key_file"
+}
+
+execute_command() {
+  local command="$1"
+  local use_sudo="$2"
+  local environment="$3"
+  local hostname="$4"
+  local username="$5"
+  shift 5
+  local ssh_opts=("$@")
 
   local full_command="$command"
 
@@ -87,8 +114,6 @@ main() {
 
   local exit_code=0
   ssh "${ssh_opts[@]}" "$username@$hostname" "$full_command" >&2 || exit_code=$?
-
-  rm -f "$ssh_key_file"
 
   if [[ $exit_code -ne 0 ]]; then
     echo "SSH command failed with exit code: $exit_code" >&2
@@ -109,6 +134,94 @@ main() {
         {name: "exit_code", value: $exit_code},
         {name: "command", value: $command},
         {name: "hostname", value: $hostname}
+      ]
+    }'
+}
+
+upload_files() {
+  local files="$1"
+  local hostname="$2"
+  local username="$3"
+  shift 3
+  local ssh_opts=("$@")
+
+  local total_files=0
+  local file_list=()
+
+  local num_files
+  num_files=$(echo "$files" | jq 'length')
+
+  for ((i=0; i<num_files; i++)); do
+    local src
+    local dest
+    local use_sudo_file
+
+    src=$(echo "$files" | jq -r ".[$i].src // empty")
+    dest=$(echo "$files" | jq -r ".[$i].dest // empty")
+    use_sudo_file=$(echo "$files" | jq -r ".[$i].use_sudo // false")
+
+    if [[ -z "$src" ]]; then
+      echo "Error: 'src' is required for each file entry" >&2
+      exit 1
+    fi
+
+    if [[ -z "$dest" ]]; then
+      echo "Error: 'dest' is required for each file entry" >&2
+      exit 1
+    fi
+
+    cd "$WORKDIR"
+
+    local matched_files
+    matched_files=$(eval "ls -1d $src 2>/dev/null" || true)
+
+    if [[ -z "$matched_files" ]]; then
+      echo "Error: no files match pattern '$src' in $WORKDIR" >&2
+      exit 1
+    fi
+
+    local upload_random
+    upload_random=$(mktemp -u "concourse-upload-XXXXXX" | xargs basename)
+    local remote_temp="/tmp/$upload_random"
+
+    ssh "${ssh_opts[@]}" "$username@$hostname" "mkdir -p '$remote_temp'" >&2
+
+    local count=0
+    while IFS= read -r file; do
+      local basename
+      basename=$(basename "$file")
+
+      scp "${ssh_opts[@]}" -r "$file" "$username@$hostname:$remote_temp/" >&2
+
+      count=$((count + 1))
+      total_files=$((total_files + 1))
+      file_list+=("$file -> $dest")
+    done <<< "$matched_files"
+
+    if [[ "$use_sudo_file" == "true" ]]; then
+      ssh "${ssh_opts[@]}" "$username@$hostname" "sudo mkdir -p '$dest' && sudo cp -rf '$remote_temp'/* '$dest'/ && rm -rf '$remote_temp'" >&2
+    else
+      ssh "${ssh_opts[@]}" "$username@$hostname" "mkdir -p '$dest' && cp -rf '$remote_temp'/* '$dest'/ && rm -rf '$remote_temp'" >&2
+    fi
+  done
+
+  local timestamp
+  timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  local files_json
+  files_json=$(printf '%s\n' "${file_list[@]}" | jq -R . | jq -s .)
+
+  jq -n \
+    --arg time "$timestamp" \
+    --arg total_files "$total_files" \
+    --arg hostname "$hostname" \
+    --argjson files "$files_json" \
+    '{
+      version: {time: $time},
+      metadata: [
+        {name: "files_uploaded", value: $total_files},
+        {name: "hostname", value: $hostname},
+        {name: "files", value: ($files | join(", "))}
       ]
     }'
 }
