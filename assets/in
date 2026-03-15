@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+DESTINATION=${1:-}
+
+mkdir -p "$DESTINATION"
+
+timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+jq -n \
+  --arg time "$timestamp" \
+  '{
+    version: {time: $time},
+    metadata: []
+  }'

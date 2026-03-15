@@ -1,0 +1,25 @@
+services:
+  ssh-server:
+    build: ./ssh-server
+    container_name: ssh-server
+    volumes:
+      - ssh-keys:/shared-keys
+
+  sut:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      - ssh-server
+    volumes:
+      - ./tests:/tests:ro
+      - ssh-keys:/shared-keys:ro
+    environment:
+      - SSH_HOST=ssh-server
+      - SSH_PORT=22
+      - SSH_USER=testuser
+      - SSH_KEY_PATH=/shared-keys/test_ssh_key
+    command: /bin/bash /tests/run_all.sh
+
+volumes:
+  ssh-keys:

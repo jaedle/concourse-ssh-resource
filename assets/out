@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+TMPDIR=${TMPDIR:-/tmp}
+
+main() {
+  local payload
+  payload=$(jq -c '.')
+
+  local hostname
+  hostname=$(echo "$payload" | jq -r '.source.hostname // empty')
+
+  local username
+  username=$(echo "$payload" | jq -r '.source.username // empty')
+
+  local ssh_key
+  ssh_key=$(echo "$payload" | jq -r '.source.ssh_key // empty')
+
+  local port
+  port=$(echo "$payload" | jq -r '.source.port // 22')
+
+  local host_key
+  host_key=$(echo "$payload" | jq -r '.source.host_key // empty')
+
+  local command
+  command=$(echo "$payload" | jq -r '.params.command // empty')
+
+  local use_sudo
+  use_sudo=$(echo "$payload" | jq -r '.params.use_sudo // false')
+
+  local environment
+  environment=$(echo "$payload" | jq -r '.params.environment // empty')
+
+  if [[ -z "$hostname" ]]; then
+    echo "Error: hostname is required in source configuration" >&2
+    exit 1
+  fi
+
+  if [[ -z "$username" ]]; then
+    echo "Error: username is required in source configuration" >&2
+    exit 1
+  fi
+
+  if [[ -z "$ssh_key" ]]; then
+    echo "Error: ssh_key is required in source configuration" >&2
+    exit 1
+  fi
+
+  if [[ -z "$command" ]]; then
+    echo "Error: command is required in params" >&2
+    exit 1
+  fi
+
+  local ssh_key_file
+  ssh_key_file=$(mktemp "$TMPDIR/ssh-key-XXXXXX")
+  chmod 600 "$ssh_key_file"
+
+  echo "$ssh_key" > "$ssh_key_file"
+
+  local ssh_opts=()
+  ssh_opts+=("-i" "$ssh_key_file")
+  ssh_opts+=("-p" "$port")
+  ssh_opts+=("-o" "UserKnownHostsFile=/dev/null")
+  ssh_opts+=("-o" "StrictHostKeyChecking=no")
+  ssh_opts+=("-o" "LogLevel=ERROR")
+
+  if [[ -n "$host_key" ]]; then
+    local known_hosts_file
+    known_hosts_file=$(mktemp "$TMPDIR/known-hosts-XXXXXX")
+    echo "$hostname $host_key" > "$known_hosts_file"
+    ssh_opts+=("-o" "UserKnownHostsFile=$known_hosts_file")
+    ssh_opts+=("-o" "StrictHostKeyChecking=yes")
+  fi
+
+  local full_command="$command"
+
+  if [[ -n "$environment" ]] && [[ "$environment" != "null" ]]; then
+    local env_vars
+    env_vars=$(echo "$environment" | jq -r 'to_entries | .[] | "\(.key)=\(.value)"' | tr '\n' ' ')
+    full_command="export $env_vars && $full_command"
+  fi
+
+  if [[ "$use_sudo" == "true" ]]; then
+    full_command="sudo -S sh -c '$full_command'"
+  fi
+
+  local exit_code=0
+  ssh "${ssh_opts[@]}" "$username@$hostname" "$full_command" >&2 || exit_code=$?
+
+  rm -f "$ssh_key_file"
+
+  if [[ $exit_code -ne 0 ]]; then
+    echo "SSH command failed with exit code: $exit_code" >&2
+    exit $exit_code
+  fi
+
+  local timestamp
+  timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  jq -n \
+    --arg time "$timestamp" \
+    --arg exit_code "$exit_code" \
+    --arg command "$command" \
+    --arg hostname "$hostname" \
+    '{
+      version: {time: $time},
+      metadata: [
+        {name: "exit_code", value: $exit_code},
+        {name: "command", value: $command},
+        {name: "hostname", value: $hostname}
+      ]
+    }'
+}
+
+main
