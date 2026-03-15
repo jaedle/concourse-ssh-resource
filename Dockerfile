@@ -4,7 +4,8 @@ RUN apk add --no-cache \
     bash \
     openssh-client \
     jq \
-    sudo
+    sudo \
+    bats
 
 COPY assets/ /opt/resource/
 

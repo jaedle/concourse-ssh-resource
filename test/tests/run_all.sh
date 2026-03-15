@@ -33,17 +33,8 @@ done
 
 sleep 2
 
-echo "Running test_check.sh..."
-/bin/bash /tests/test_check.sh
-echo "✓ test_check.sh passed"
-
-echo "Running test_in.sh..."
-/bin/bash /tests/test_in.sh
-echo "✓ test_in.sh passed"
-
-echo "Running test_out.sh..."
-/bin/bash /tests/test_out.sh
-echo "✓ test_out.sh passed"
+echo "Running BATS tests..."
+bats /tests/*.bats
 
 echo ""
 echo "All tests passed!"
