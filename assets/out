@@ -73,8 +73,6 @@ main() {
   local ssh_opts=()
   ssh_opts+=("-i" "$ssh_key_file")
   ssh_opts+=("-o" "Port=$port")
-  ssh_opts+=("-o" "UserKnownHostsFile=/dev/null")
-  ssh_opts+=("-o" "StrictHostKeyChecking=no")
   ssh_opts+=("-o" "LogLevel=ERROR")
 
   if [[ -n "$host_key" ]]; then
@@ -83,6 +81,9 @@ main() {
     echo "$hostname $host_key" > "$known_hosts_file"
     ssh_opts+=("-o" "UserKnownHostsFile=$known_hosts_file")
     ssh_opts+=("-o" "StrictHostKeyChecking=yes")
+  else
+    ssh_opts+=("-o" "UserKnownHostsFile=/dev/null")
+    ssh_opts+=("-o" "StrictHostKeyChecking=no")
   fi
 
   if [[ -n "$command" ]]; then

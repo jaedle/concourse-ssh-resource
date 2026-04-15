@@ -17,4 +17,8 @@ cp /tmp/test_ssh_key /shared-keys/test_ssh_key
 cp /tmp/test_ssh_key.pub /shared-keys/test_ssh_key.pub
 chmod 644 /shared-keys/test_ssh_key
 
+# Export the server's own RSA host public key for strict host key verification tests
+cp /etc/ssh/ssh_host_rsa_key.pub /shared-keys/ssh_host_rsa_key.pub
+chmod 644 /shared-keys/ssh_host_rsa_key.pub
+
 exec /usr/sbin/sshd -D -e

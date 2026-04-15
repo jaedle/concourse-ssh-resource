@@ -512,3 +512,54 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"'dest' is required"* ]]
 }
+
+@test "out succeeds with correct host_key" {
+  PAYLOAD=$(cat <<EOF
+{
+  "source": {
+    "hostname": "$SSH_HOST",
+    "username": "$SSH_USER",
+    "ssh_key": $(echo "$SSH_KEY" | jq -Rs .),
+    "port": $SSH_PORT,
+    "host_key": $(echo "$SSH_HOST_KEY" | jq -Rs .)
+  },
+  "params": {
+    "command": "echo hello"
+  }
+}
+EOF
+)
+
+  run run_out "$PAYLOAD"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "out fails with wrong host_key" {
+  # Generate a valid but unrelated RSA keypair to use as the wrong host key
+  WRONG_KEY_FILE=$(mktemp)
+  rm -f "$WRONG_KEY_FILE"
+  ssh-keygen -t rsa -b 2048 -f "$WRONG_KEY_FILE" -N "" -q
+  WRONG_KEY=$(awk '{print $1" "$2}' "${WRONG_KEY_FILE}.pub")
+  rm -f "$WRONG_KEY_FILE" "${WRONG_KEY_FILE}.pub"
+
+  PAYLOAD=$(cat <<EOF
+{
+  "source": {
+    "hostname": "$SSH_HOST",
+    "username": "$SSH_USER",
+    "ssh_key": $(echo "$SSH_KEY" | jq -Rs .),
+    "port": $SSH_PORT,
+    "host_key": $(echo "$WRONG_KEY" | jq -Rs .)
+  },
+  "params": {
+    "command": "echo hello"
+  }
+}
+EOF
+)
+
+  run run_out "$PAYLOAD"
+
+  [ "$status" -ne 0 ]
+}
