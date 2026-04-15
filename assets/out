@@ -36,6 +36,9 @@ main() {
   local environment
   environment=$(echo "$payload" | jq -r '.params.environment // empty')
 
+  local dir
+  dir="$(echo "$payload" | jq -r '.params.dir // empty')"
+
   if [[ -z "$hostname" ]]; then
     echo "Error: hostname is required in source configuration" >&2
     exit 1
@@ -83,7 +86,7 @@ main() {
   fi
 
   if [[ -n "$command" ]]; then
-    execute_command "$command" "$use_sudo" "$environment" "$hostname" "$username" "${ssh_opts[@]}"
+    execute_command "$command" "$use_sudo" "$environment" "$dir" "$hostname" "$username" "${ssh_opts[@]}"
   else
     upload_files "$files" "$hostname" "$username" "${ssh_opts[@]}"
   fi
@@ -95,9 +98,10 @@ execute_command() {
   local command="$1"
   local use_sudo="$2"
   local environment="$3"
-  local hostname="$4"
-  local username="$5"
-  shift 5
+  local dir="$4"
+  local hostname="$5"
+  local username="$6"
+  shift 6
   local ssh_opts=("$@")
 
   local full_command="$command"
@@ -106,6 +110,10 @@ execute_command() {
     local env_vars
     env_vars=$(echo "$environment" | jq -r 'to_entries | .[] | "\(.key)=\(.value)"' | tr '\n' ' ')
     full_command="export $env_vars && $full_command"
+  fi
+
+  if [[ -n "$dir" ]]; then
+    full_command="cd '$dir' && $full_command"
   fi
 
   if [[ "$use_sudo" == "true" ]]; then

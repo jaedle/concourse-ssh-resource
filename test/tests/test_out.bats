@@ -419,6 +419,72 @@ EOF
   [[ "$output" == *"'src' is required"* ]]
 }
 
+@test "out changes directory before executing command" {
+  PAYLOAD=$(cat <<EOF
+{
+  "source": {
+    "hostname": "$SSH_HOST",
+    "username": "$SSH_USER",
+    "ssh_key": $(echo "$SSH_KEY" | jq -Rs .),
+    "port": $SSH_PORT
+  },
+  "params": {
+    "command": "pwd",
+    "dir": "/tmp"
+  }
+}
+EOF
+)
+
+  run run_out "$PAYLOAD"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "out command sees working directory after dir change" {
+  PAYLOAD=$(cat <<EOF
+{
+  "source": {
+    "hostname": "$SSH_HOST",
+    "username": "$SSH_USER",
+    "ssh_key": $(echo "$SSH_KEY" | jq -Rs .),
+    "port": $SSH_PORT
+  },
+  "params": {
+    "command": "test \"\$(pwd)\" = \"/tmp\"",
+    "dir": "/tmp"
+  }
+}
+EOF
+)
+
+  run run_out "$PAYLOAD"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "out fails with non-zero exit code when dir does not exist" {
+  PAYLOAD=$(cat <<EOF
+{
+  "source": {
+    "hostname": "$SSH_HOST",
+    "username": "$SSH_USER",
+    "ssh_key": $(echo "$SSH_KEY" | jq -Rs .),
+    "port": $SSH_PORT
+  },
+  "params": {
+    "command": "echo hello",
+    "dir": "/nonexistent-directory-that-does-not-exist"
+  }
+}
+EOF
+)
+
+  run run_out "$PAYLOAD"
+
+  [ "$status" -ne 0 ]
+}
+
 @test "out fails when files missing dest" {
   echo "test" > "$TMPDIR/test.txt"
 

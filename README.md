@@ -58,12 +58,13 @@ jobs:
 
 ### `put` Parameters
 
-| Parameter     | Required | Description                                           |
-|---------------|----------|-------------------------------------------------------|
-| `command`     | Yes*     | Command to execute on remote server                   |
-| `files`       | Yes*     | Array of file transfers (see below)                   |
-| `use_sudo`    | No       | Execute command with sudo (default: false)            |
-| `environment` | No       | Environment variables to set before executing command |
+| Parameter     | Required | Description                                                                                    |
+|---------------|----------|------------------------------------------------------------------------------------------------|
+| `command`     | Yes*     | Command to execute on remote server                                                            |
+| `files`       | Yes*     | Array of file transfers (see below)                                                            |
+| `dir`         | No       | Remote directory to change into before executing `command` (fails if directory does not exist) |
+| `use_sudo`    | No       | Execute command with sudo (default: false)                                                     |
+| `environment` | No       | Environment variables to set before executing command                                          |
 
 *Either `command` OR `files` is required (mutually exclusive).
 
