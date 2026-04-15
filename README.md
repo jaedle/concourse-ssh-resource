@@ -28,6 +28,7 @@ jobs:
       - put: my-server
         params:
           command: /opt/app/deploy.sh
+          dir:    /opt/app         # optional
           use_sudo: true           # optional
           environment:             # optional
             DEPLOY_ENV: production
