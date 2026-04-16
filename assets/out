@@ -208,9 +208,9 @@ upload_files() {
     done <<< "$matched_files"
 
     if [[ "$use_sudo_file" == "true" ]]; then
-      ssh "${ssh_opts[@]}" "$username@$hostname" "sudo mkdir -p '$dest' && sudo cp -rf '$remote_temp'/* '$dest'/ && rm -rf '$remote_temp'" >&2
+      ssh "${ssh_opts[@]}" "$username@$hostname" "sudo mkdir -p '$dest' && sudo cp -rf '$remote_temp'/. '$dest'/ && rm -rf '$remote_temp'" >&2
     else
-      ssh "${ssh_opts[@]}" "$username@$hostname" "mkdir -p '$dest' && cp -rf '$remote_temp'/* '$dest'/ && rm -rf '$remote_temp'" >&2
+      ssh "${ssh_opts[@]}" "$username@$hostname" "mkdir -p '$dest' && cp -rf '$remote_temp'/. '$dest'/ && rm -rf '$remote_temp'" >&2
     fi
   done
 

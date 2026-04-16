@@ -189,6 +189,38 @@ EOF
   [ "$output" = "test content" ]
 }
 
+@test "out uploads hidden file" {
+  printf "secret=value" > "$TMPDIR/.env"
+
+  PAYLOAD=$(cat <<EOF
+{
+  "source": {
+    "hostname": "$SSH_HOST",
+    "username": "$SSH_USER",
+    "ssh_key": $(echo "$SSH_KEY" | jq -Rs .),
+    "port": $SSH_PORT
+  },
+  "params": {
+    "files": [
+      {
+        "src": ".env",
+        "dest": "/tmp/upload-hidden-test"
+      }
+    ]
+  }
+}
+EOF
+)
+
+  run run_out "$PAYLOAD"
+
+  [ "$status" -eq 0 ]
+
+  run ssh -i "$SSH_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o LogLevel=ERROR "$SSH_USER@$SSH_HOST" "cat /tmp/upload-hidden-test/.env"
+  [ "$status" -eq 0 ]
+  [ "$output" = "secret=value" ]
+}
+
 @test "out uploads files with glob pattern" {
   mkdir -p "$TMPDIR/dist"
   echo "file1" > "$TMPDIR/dist/file1.txt"
