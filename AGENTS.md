@@ -68,8 +68,8 @@ echo '{"source":{"hostname":"...","username":"...","ssh_key":"..."},"params":{"c
 ## Resource Behavior
 
 ### check
-- Returns empty array `[]`
-- No version tracking
+- Returns single version with random `uuid`
+- New value generated on each invocation
 
 ### in
 - Creates empty destination directory

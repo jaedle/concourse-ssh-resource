@@ -123,7 +123,7 @@ Rules:
 
 ## Behavior
 
-- **`check`** *(unsupported)*: Returns empty array `[]`
+- **`check`**: Returns single fresh version with random `uuid` on each invocation
 - **`in`**:
   - Requires `params.files`
   - Downloads each remote file into `<artifact-dir>/<dest>/<basename(src)>`

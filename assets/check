@@ -4,4 +4,15 @@ set -euo pipefail
 
 cat > /dev/null
 
-echo '[]'
+generate_uuid() {
+  if [[ -r /proc/sys/kernel/random/uuid ]]; then
+    cat /proc/sys/kernel/random/uuid
+    return
+  fi
+
+  printf '%s-%s\n' "$(date +%s%N)" "$RANDOM"
+}
+
+uuid=$(generate_uuid)
+
+jq -cn --arg uuid "$uuid" '[{uuid: $uuid}]'
