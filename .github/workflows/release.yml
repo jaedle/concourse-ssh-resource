@@ -14,9 +14,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Run integration tests
-        run: |
-          cd test
-          ./run_integration_tests.sh
+        run: ./world.sh
 
   build:
     runs-on: ubuntu-latest
