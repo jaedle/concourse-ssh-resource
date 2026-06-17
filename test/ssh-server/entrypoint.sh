@@ -21,4 +21,6 @@ chmod 644 /shared-keys/test_ssh_key
 cp /etc/ssh/ssh_host_rsa_key.pub /shared-keys/ssh_host_rsa_key.pub
 chmod 644 /shared-keys/ssh_host_rsa_key.pub
 
-exec /usr/sbin/sshd -D -e
+# Disable per-source auth penalties in test server. BATS may intentionally trigger
+# failed auth or rapid reconnects while asserting error paths.
+exec /usr/sbin/sshd -D -e -o PerSourcePenalties=no

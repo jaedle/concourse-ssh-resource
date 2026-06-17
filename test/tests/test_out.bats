@@ -15,6 +15,20 @@ teardown() {
   rm -f "$SSH_KEY_FILE"
 }
 
+remote_exec() {
+  ssh \
+    -i "$SSH_KEY_FILE" \
+    -p "$SSH_PORT" \
+    -o StrictHostKeyChecking=no \
+    -o LogLevel=ERROR \
+    -o BatchMode=yes \
+    -o IdentitiesOnly=yes \
+    -o PreferredAuthentications=publickey \
+    -o PasswordAuthentication=no \
+    "$SSH_USER@$SSH_HOST" \
+    "$1"
+}
+
 run_out() {
   local payload="$1"
   echo "$payload" | /opt/resource/out "$TMPDIR"
@@ -184,7 +198,7 @@ EOF
   FILES_UPLOADED=$(echo "$JSON_OUTPUT" | jq -r '.metadata[] | select(.name=="files_uploaded") | .value')
   [ "$FILES_UPLOADED" = "1" ]
   
-  run ssh -i "$SSH_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o LogLevel=ERROR "$SSH_USER@$SSH_HOST" "cat /tmp/upload-test/testfile.txt"
+  run remote_exec "cat /tmp/upload-test/testfile.txt"
   [ "$status" -eq 0 ]
   [ "$output" = "test content" ]
 }
@@ -216,7 +230,7 @@ EOF
 
   [ "$status" -eq 0 ]
 
-  run ssh -i "$SSH_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o LogLevel=ERROR "$SSH_USER@$SSH_HOST" "cat /tmp/upload-hidden-test/.env"
+  run remote_exec "cat /tmp/upload-hidden-test/.env"
   [ "$status" -eq 0 ]
   [ "$output" = "secret=value" ]
 }
@@ -255,7 +269,7 @@ EOF
   FILES_UPLOADED=$(echo "$JSON_OUTPUT" | jq -r '.metadata[] | select(.name=="files_uploaded") | .value')
   [ "$FILES_UPLOADED" = "2" ]
   
-  run ssh -i "$SSH_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o LogLevel=ERROR "$SSH_USER@$SSH_HOST" "ls /tmp/upload-glob-test"
+  run remote_exec "ls /tmp/upload-glob-test"
   [ "$status" -eq 0 ]
   [[ "$output" == *"file1.txt"* ]]
   [[ "$output" == *"file2.txt"* ]]
@@ -290,7 +304,7 @@ EOF
   
   [ "$status" -eq 0 ]
   
-  run ssh -i "$SSH_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o LogLevel=ERROR "$SSH_USER@$SSH_HOST" "cat /tmp/upload-dir-test/app/subdir/config.yml"
+  run remote_exec "cat /tmp/upload-dir-test/app/subdir/config.yml"
   [ "$status" -eq 0 ]
   [ "$output" = "config" ]
 }
@@ -361,11 +375,11 @@ EOF
   
   [ "$status" -eq 0 ]
   
-  run ssh -i "$SSH_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o LogLevel=ERROR "$SSH_USER@$SSH_HOST" "sudo cat /opt/sudo-test/rootfile.txt"
+  run remote_exec "sudo cat /opt/sudo-test/rootfile.txt"
   [ "$status" -eq 0 ]
   [ "$output" = "root-file" ]
   
-  ssh -i "$SSH_KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o LogLevel=ERROR "$SSH_USER@$SSH_HOST" "sudo rm -rf /opt/sudo-test" || true
+  remote_exec "sudo rm -rf /opt/sudo-test" || true
 }
 
 @test "out fails when both command and files specified" {

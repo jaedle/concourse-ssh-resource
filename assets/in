@@ -2,15 +2,363 @@
 
 set -euo pipefail
 
+TMPDIR=${TMPDIR:-/tmp}
 DESTINATION=${1:-}
 
-mkdir -p "$DESTINATION"
+SSH_KEY_FILE=""
+KNOWN_HOSTS_FILE=""
 
-timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+HOSTNAME=""
+USERNAME=""
+PORT=""
+HOST_KEY=""
 
-jq -n \
-  --arg time "$timestamp" \
-  '{
-    version: {time: $time},
-    metadata: []
-  }'
+declare -a SSH_OPTS=()
+declare -a REMOTE_SRCS=()
+declare -a DEST_DIRS=()
+declare -a LOCAL_TARGETS=()
+declare -a USE_SUDO_FLAGS=()
+declare -a FILE_SUMMARY=()
+
+main() {
+  if [[ -z "$DESTINATION" ]]; then
+    echo "Error: destination directory argument is required" >&2
+    exit 1
+  fi
+
+  local payload
+  payload=$(jq -c '.')
+
+  trap cleanup_local_artifacts EXIT
+
+  parse_source "$payload"
+  setup_ssh_artifacts
+  validate_files "$payload"
+
+  mkdir -p "$DESTINATION"
+  download_files
+  emit_response
+}
+
+cleanup_local_artifacts() {
+  rm -f "$SSH_KEY_FILE" "$KNOWN_HOSTS_FILE"
+}
+
+parse_source() {
+  local payload="$1"
+
+  HOSTNAME=$(echo "$payload" | jq -r '.source.hostname // empty')
+  USERNAME=$(echo "$payload" | jq -r '.source.username // empty')
+  SSH_KEY=$(echo "$payload" | jq -r '.source.ssh_key // empty')
+  PORT=$(echo "$payload" | jq -r '.source.port // 22')
+  HOST_KEY=$(echo "$payload" | jq -r '.source.host_key // empty')
+
+  if [[ -z "$HOSTNAME" ]]; then
+    echo "Error: hostname is required in source configuration" >&2
+    exit 1
+  fi
+
+  if [[ -z "$USERNAME" ]]; then
+    echo "Error: username is required in source configuration" >&2
+    exit 1
+  fi
+
+  if [[ -z "$SSH_KEY" ]]; then
+    echo "Error: ssh_key is required in source configuration" >&2
+    exit 1
+  fi
+}
+
+setup_ssh_artifacts() {
+  SSH_KEY_FILE=$(mktemp "$TMPDIR/ssh-key-XXXXXX")
+  chmod 600 "$SSH_KEY_FILE"
+  printf '%s\n' "$SSH_KEY" > "$SSH_KEY_FILE"
+
+  SSH_OPTS=(
+    "-i" "$SSH_KEY_FILE"
+    "-o" "Port=$PORT"
+    "-o" "LogLevel=ERROR"
+    "-o" "BatchMode=yes"
+    "-o" "IdentitiesOnly=yes"
+    "-o" "PreferredAuthentications=publickey"
+    "-o" "PasswordAuthentication=no"
+  )
+
+  if [[ -n "$HOST_KEY" ]]; then
+    KNOWN_HOSTS_FILE=$(mktemp "$TMPDIR/known-hosts-XXXXXX")
+    printf '%s %s\n' "$HOSTNAME" "$HOST_KEY" > "$KNOWN_HOSTS_FILE"
+    SSH_OPTS+=("-o" "UserKnownHostsFile=$KNOWN_HOSTS_FILE")
+    SSH_OPTS+=("-o" "StrictHostKeyChecking=yes")
+  else
+    SSH_OPTS+=("-o" "UserKnownHostsFile=/dev/null")
+    SSH_OPTS+=("-o" "StrictHostKeyChecking=no")
+  fi
+}
+
+validate_files() {
+  local payload="$1"
+
+  if ! echo "$payload" | jq -e '.params.files' >/dev/null 2>&1; then
+    echo "Error: params.files is required for get" >&2
+    exit 1
+  fi
+
+  if ! echo "$payload" | jq -e '.params.files | type == "array"' >/dev/null 2>&1; then
+    echo "Error: params.files must be an array" >&2
+    exit 1
+  fi
+
+  local file_count
+  file_count=$(echo "$payload" | jq '.params.files | length')
+  if [[ "$file_count" -eq 0 ]]; then
+    echo "Error: params.files must not be empty" >&2
+    exit 1
+  fi
+
+  local -A seen_targets=()
+  local i
+  for ((i=0; i<file_count; i++)); do
+    local src
+    local dest
+    local use_sudo
+    local normalized_dest
+    local target_path
+    local basename_src
+
+    src=$(echo "$payload" | jq -r ".params.files[$i].src // empty")
+    dest=$(echo "$payload" | jq -r ".params.files[$i].dest // empty")
+    use_sudo=$(echo "$payload" | jq -r ".params.files[$i].use_sudo // false")
+
+    if [[ -z "$src" ]]; then
+      echo "Error: src is required for each params.files entry" >&2
+      exit 1
+    fi
+
+    if [[ -z "$dest" ]]; then
+      echo "Error: dest is required for each params.files entry" >&2
+      exit 1
+    fi
+
+    if [[ "$src" != /* ]]; then
+      echo "Error: src must be an absolute remote path: $src" >&2
+      exit 1
+    fi
+
+    normalized_dest=$(normalize_dest "$dest")
+    basename_src=$(basename "$src")
+
+    if [[ "$normalized_dest" == "." ]]; then
+      target_path="$DESTINATION/$basename_src"
+    else
+      target_path="$DESTINATION/$normalized_dest/$basename_src"
+    fi
+
+    if [[ -n "${seen_targets[$target_path]:-}" ]]; then
+      echo "Error: duplicate local target path resolved for '$src': $target_path" >&2
+      exit 1
+    fi
+    seen_targets["$target_path"]=1
+
+    REMOTE_SRCS+=("$src")
+    DEST_DIRS+=("$normalized_dest")
+    LOCAL_TARGETS+=("$target_path")
+    USE_SUDO_FLAGS+=("$use_sudo")
+    FILE_SUMMARY+=("$src -> ${target_path#$DESTINATION/}")
+  done
+}
+
+normalize_dest() {
+  local dest="$1"
+  local segment
+  local -a parts=()
+  local normalized=""
+
+  if [[ "$dest" == /* ]]; then
+    echo "Error: dest must be a relative path: $dest" >&2
+    exit 1
+  fi
+
+  IFS='/' read -r -a raw_parts <<< "$dest"
+  for segment in "${raw_parts[@]}"; do
+    if [[ -z "$segment" || "$segment" == "." ]]; then
+      continue
+    fi
+
+    if [[ "$segment" == ".." ]]; then
+      if [[ ${#parts[@]} -eq 0 ]]; then
+        echo "Error: dest must not escape destination directory: $dest" >&2
+        exit 1
+      fi
+      unset 'parts[${#parts[@]}-1]'
+      continue
+    fi
+
+    parts+=("$segment")
+  done
+
+  if [[ ${#parts[@]} -eq 0 ]]; then
+    printf '.\n'
+    return
+  fi
+
+  for segment in "${parts[@]}"; do
+    if [[ -n "$normalized" ]]; then
+      normalized+="/"
+    fi
+    normalized+="$segment"
+  done
+
+  printf '%s\n' "$normalized"
+}
+
+download_files() {
+  local i
+  for ((i=0; i<${#REMOTE_SRCS[@]}; i++)); do
+    mkdir -p "$(dirname "${LOCAL_TARGETS[$i]}")"
+
+    if [[ "${USE_SUDO_FLAGS[$i]}" == "true" ]]; then
+      download_with_sudo "${REMOTE_SRCS[$i]}" "${LOCAL_TARGETS[$i]}"
+    else
+      download_direct "${REMOTE_SRCS[$i]}" "${LOCAL_TARGETS[$i]}"
+    fi
+  done
+}
+
+download_direct() {
+  local src="$1"
+  local local_target="$2"
+  local exit_code=0
+
+  ssh "${SSH_OPTS[@]}" "$USERNAME@$HOSTNAME" "test -r '$src'" >&2 || exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    if [[ $exit_code -eq 255 ]]; then
+      echo "Error downloading '$src': SSH connection or authentication failed" >&2
+    else
+      echo "Error downloading '$src': remote file missing or unreadable" >&2
+    fi
+    exit "$exit_code"
+  fi
+
+  exit_code=0
+  scp "${SSH_OPTS[@]}" "$USERNAME@$HOSTNAME:$src" "$local_target" >&2 || exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    if [[ $exit_code -eq 255 ]]; then
+      echo "Error downloading '$src': SSH connection or authentication failed during copy" >&2
+    else
+      echo "Error downloading '$src': failed to copy file to local destination '$local_target'" >&2
+    fi
+    exit "$exit_code"
+  fi
+}
+
+download_with_sudo() {
+  local src="$1"
+  local local_target="$2"
+  local remote_temp_dir=""
+  local remote_temp_file=""
+  local fetch_ok="false"
+  local exit_code=0
+
+  remote_temp_dir=$(create_remote_temp_dir "$src")
+  remote_temp_file="$remote_temp_dir/$(basename "$src")"
+
+  ssh "${SSH_OPTS[@]}" "$USERNAME@$HOSTNAME" "sudo cp '$src' '$remote_temp_file' && sudo chown '$USERNAME':'$USERNAME' '$remote_temp_file' && sudo chmod 600 '$remote_temp_file'" >&2 || exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    cleanup_remote_temp_strict "$remote_temp_dir" "$src"
+    if [[ $exit_code -eq 255 ]]; then
+      echo "Error downloading '$src': SSH connection or authentication failed" >&2
+    else
+      echo "Error downloading '$src': sudo copy failed; remote file missing, unreadable, or sudo denied" >&2
+    fi
+    exit "$exit_code"
+  fi
+
+  exit_code=0
+  scp "${SSH_OPTS[@]}" "$USERNAME@$HOSTNAME:$remote_temp_file" "$local_target" >&2 || exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    cleanup_remote_temp_strict "$remote_temp_dir" "$src"
+    if [[ $exit_code -eq 255 ]]; then
+      echo "Error downloading '$src': SSH connection or authentication failed during copy" >&2
+    else
+      echo "Error downloading '$src': failed to copy sudo-prepared file to local destination '$local_target'" >&2
+    fi
+    exit "$exit_code"
+  fi
+  fetch_ok=true
+
+  if [[ "$fetch_ok" == "true" ]]; then
+    cleanup_remote_temp_warn "$remote_temp_dir" "$src"
+  fi
+}
+
+create_remote_temp_dir() {
+  local src="$1"
+  local remote_temp_dir
+  local exit_code=0
+
+  remote_temp_dir=$(ssh "${SSH_OPTS[@]}" "$USERNAME@$HOSTNAME" "mktemp -d /tmp/concourse-ssh-resource-in-XXXXXX") || exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    if [[ $exit_code -eq 255 ]]; then
+      echo "Error downloading '$src': SSH connection or authentication failed" >&2
+    else
+      echo "Error downloading '$src': failed to create remote temporary directory" >&2
+    fi
+    exit "$exit_code"
+  fi
+
+  printf '%s\n' "$remote_temp_dir"
+}
+
+cleanup_remote_temp_strict() {
+  local remote_temp_dir="$1"
+  local src="$2"
+  local exit_code=0
+
+  if [[ -z "$remote_temp_dir" ]]; then
+    return
+  fi
+
+  ssh "${SSH_OPTS[@]}" "$USERNAME@$HOSTNAME" "sudo rm -rf '$remote_temp_dir'" >&2 || exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Warning: failed to clean up remote temporary download path for '$src': $remote_temp_dir" >&2
+  fi
+}
+
+cleanup_remote_temp_warn() {
+  local remote_temp_dir="$1"
+  local src="$2"
+  local exit_code=0
+
+  if [[ -z "$remote_temp_dir" ]]; then
+    return
+  fi
+
+  ssh "${SSH_OPTS[@]}" "$USERNAME@$HOSTNAME" "sudo rm -rf '$remote_temp_dir'" >&2 || exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    echo "Warning: downloaded '$src' but failed to clean up remote temporary download path: $remote_temp_dir" >&2
+  fi
+}
+
+emit_response() {
+  local timestamp
+  local files_json
+
+  timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  files_json=$(printf '%s\n' "${FILE_SUMMARY[@]}" | jq -R . | jq -s .)
+
+  jq -n \
+    --arg time "$timestamp" \
+    --arg hostname "$HOSTNAME" \
+    --arg files_downloaded "${#REMOTE_SRCS[@]}" \
+    --argjson files "$files_json" \
+    '{
+      version: {time: $time},
+      metadata: [
+        {name: "hostname", value: $hostname},
+        {name: "files_downloaded", value: $files_downloaded},
+        {name: "files", value: ($files | join(", "))}
+      ]
+    }'
+}
+
+main

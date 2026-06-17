@@ -8,7 +8,7 @@ echo "Running integration tests..."
 echo ""
 
 EXIT_CODE=0
-docker compose up --abort-on-container-exit --build || EXIT_CODE=$?
+docker compose up --force-recreate --abort-on-container-exit --build || EXIT_CODE=$?
 
 docker compose down -v
 

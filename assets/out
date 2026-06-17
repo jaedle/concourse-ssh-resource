@@ -74,6 +74,10 @@ main() {
   ssh_opts+=("-i" "$ssh_key_file")
   ssh_opts+=("-o" "Port=$port")
   ssh_opts+=("-o" "LogLevel=ERROR")
+  ssh_opts+=("-o" "BatchMode=yes")
+  ssh_opts+=("-o" "IdentitiesOnly=yes")
+  ssh_opts+=("-o" "PreferredAuthentications=publickey")
+  ssh_opts+=("-o" "PasswordAuthentication=no")
 
   if [[ -n "$host_key" ]]; then
     local known_hosts_file
